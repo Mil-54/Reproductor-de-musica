@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Systems Engineering - Final Stable Player</title>
+    <style>
+        :root {
+            --neon: #00f2ff;
+            --purple: #bc13fe;
+            --glass: rgba(15, 20, 30, 0.85);
+        }
+
+        body {
+            margin: 0; padding: 20px; height: 100vh;
+            background: #050508; color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            grid-template-rows: 1fr 150px;
+            gap: 15px;
+            background-image: radial-gradient(circle at 50% 50%, #1a1d29, #050508);
+        }
+
+        .widget {
+            background: var(--glass);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(0, 242, 255, 0.2);
+            border-radius: 20px;
+            padding: 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+        }
+
+        /* --- PLAYLIST --- */
+        .playlist { grid-row: 1 / 3; display: flex; flex-direction: column; }
+        .track-list { overflow-y: auto; margin-top: 15px; flex-grow: 1; }
+        .track-card {
+            padding: 12px; border-radius: 10px; cursor: pointer;
+            margin-bottom: 8px; border: 1px solid transparent;
+            background: rgba(255,255,255,0.03); transition: 0.3s;
+        }
+        .track-card:hover { background: rgba(0, 242, 255, 0.1); }
+        .track-card.active { border-color: var(--neon); background: rgba(0, 242, 255, 0.05); }
+
+        /* --- PLAYER CORE --- */
+        .player-main { display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+        .v-blob {
+            position: absolute; width: 220px; height: 220px;
+            background: linear-gradient(45deg, var(--purple), var(--neon));
+            border-radius: 50%; filter: blur(30px); opacity: 0.4;
+            transition: transform 0.1s ease-out; z-index: 1;
+        }
+        .cover-img { width: 180px; height: 180px; border-radius: 50%; border: 3px solid var(--neon); z-index: 2; object-fit: cover; }
+
+        /* --- CONTROLES --- */
+        .controls { width: 100%; max-width: 450px; margin-top: 25px; display: flex; align-items: center; gap: 15px; z-index: 3; }
+        .play-btn {
+            width: 60px; height: 60px; border-radius: 50%; border: 2px solid var(--neon);
+            background: none; color: var(--neon); font-size: 1.5rem; cursor: pointer;
+        }
+        .progress-bar { flex-grow: 1; height: 6px; background: rgba(255,255,255,0.1); border-radius: 5px; cursor: pointer; overflow: hidden; }
+        .progress-fill { height: 100%; width: 0%; background: var(--neon); box-shadow: 0 0 15px var(--neon); transition: width 0.1s linear; }
+
+        /* --- SPECTRO --- */
+        .spectro { grid-column: 2; }
+        canvas { width: 100%; height: 80px; }
+
+        .label { font-size: 0.6rem; color: var(--neon); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; display: block; opacity: 0.7; }
+    </style>
+</head>
+<body>
+
+    <audio id="audio-engine" preload="auto"></audio>
+
+    <div class="widget playlist">
+        <span class="label">Memory_Storage // Playlist</span>
+        <div class="track-list" id="track-list"></div>
+    </div>
+
+    <div class="widget player-main">
+        <span class="label">Core_Status // Active</span>
+        <div class="v-blob" id="v-blob"></div>
+        <img src="" id="v-cover" class="cover-img">
+        <h2 id="v-title" style="margin: 20px 0 5px 0;">---</h2>
+        <p id="v-artist" style="opacity: 0.5; margin: 0;">---</p>
+        
+        <div class="controls">
+            <button class="play-btn" id="play-trigger">▶</button>
+            <div class="progress-bar" id="p-bar">
+                <div class="progress-fill" id="p-fill"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="widget spectro">
+        <span class="label">Signal_Analysis // Spectrum</span>
+        <canvas id="v-canvas"></canvas>
+    </div>
+
+    <script>
+        // Fuentes de alta disponibilidad (GitHub y repos estables)
+        const songs = [
+            { name: "DATA_CORE", artist: "Heavy_Metal", src: "https://raw.githubusercontent.com/rafaelreis-hotmart/Audio-Visualizer/master/music/Amon%20Amarth%20-%20Twilight%20Of%20The%20Thunder%20God.mp3", img: "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=400" },
+            { name: "CYBER_DREAMS", artist: "Synth_Wave", src: "https://www.mfiles.co.uk/mp3-downloads/franz-schubert-standchen-serenade.mp3", img: "https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=400" },
+            { name: "NEON_BIT", artist: "Bit_Architect", src: "https://www.mfiles.co.uk/mp3-downloads/brahms-st-anthony-chorale-theme-pno.mp3", img: "https://images.unsplash.com/photo-1506157786151-b8491531f063?w=400" }
+        ];
+
+        let audioCtx, analyser, source, dataArray, canvas, ctx;
+        let isPlaying = false;
+        let currentIdx = 0;
+        const audio = document.getElementById('audio-engine');
+
+        // 1. Inicializar Playlist UI
+        const listUI = document.getElementById('track-list');
+        songs.forEach((s, i) => {
+            const div = document.createElement('div');
+            div.className = `track-card ${i === 0 ? 'active' : ''}`;
+            div.innerHTML = `<strong>${s.name}</strong><br><small>${s.artist}</small>`;
+            div.onclick = () => loadTrack(i);
+            listUI.appendChild(div);
+        });
+
+        // 2. Carga Robusta
+        function loadTrack(i) {
+            currentIdx = i;
+            const s = songs[i];
+            
+            // Ingeniería de Seguridad: Forzar cabeceras CORS
+            audio.crossOrigin = "anonymous";
+            audio.src = s.src;
+            audio.load();
+
+            document.getElementById('v-title').innerText = s.name;
+            document.getElementById('v-artist').innerText = s.artist;
+            document.getElementById('v-cover').src = s.img;
+            
+            document.querySelectorAll('.track-card').forEach((el, idx) => el.classList.toggle('active', idx === i));
+            if(isPlaying) playTrack();
+        }
+
+        // 3. Motor de Audio
+        async function initEngine() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 128;
+                source = audioCtx.createMediaElementSource(audio);
+                source.connect(analyser);
+                analyser.connect(audioCtx.destination);
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                
+                canvas = document.getElementById('v-canvas');
+                ctx = canvas.getContext('2d');
+            }
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+        }
+
+        async function playTrack() {
+            try {
+                await initEngine();
+                await audio.play();
+                isPlaying = true;
+                document.getElementById('play-trigger').innerText = '❙❙';
+                render();
+            } catch (err) {
+                console.error("Fallo de Ingeniería:", err);
+                isPlaying = false;
+                document.getElementById('play-trigger').innerText = '▶';
+            }
+        }
+
+        function render() {
+            if (!isPlaying) return;
+            requestAnimationFrame(render);
+            analyser.getByteFrequencyData(dataArray);
+
+            // BAILE (Súper Sensibilidad)
+            let bass = (dataArray[1] + dataArray[2] + dataArray[3]) / 3;
+            let scale = 1 + (bass / 255) * 1.5; // Multiplicador de impacto
+            document.getElementById('v-blob').style.transform = `scale(${scale})`;
+
+            // ESPECTRO
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            let barW = (canvas.width / dataArray.length) * 2;
+            for(let i=0; i<dataArray.length; i++) {
+                let h = dataArray[i] / 2;
+                ctx.fillStyle = `rgba(0, 242, 255, ${dataArray[i]/255})`;
+                ctx.fillRect(i * (barW + 1), canvas.height - h, barW, h);
+            }
+        }
+
+        document.getElementById('play-trigger').onclick = () => {
+            if (isPlaying) {
+                audio.pause();
+                isPlaying = false;
+                document.getElementById('play-trigger').innerText = '▶';
+            } else {
+                playTrack();
+            }
+        };
+
+        audio.ontimeupdate = () => {
+            if(audio.duration) {
+                const p = (audio.currentTime / audio.duration) * 100;
+                document.getElementById('p-fill').style.width = p + '%';
+            }
+        };
+
+        window.onload = () => loadTrack(0);
+    </script>
+</body>
+</html>
